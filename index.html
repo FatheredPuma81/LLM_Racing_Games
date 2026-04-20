@@ -232,35 +232,60 @@ Do not use any dependencies other than Three.js from cdnjs. Everything must work
   <div class="grid" id="grid"></div>
 
   <script>
+    // Parse filename into { modelName, quantization }
     function parseGameInfo(basename) {
+      // Remove " - Copy" suffix if present
       let clean = basename.replace(/\s*-\s*Copy$/, '');
+      
+      // Split by underscore
       let parts = clean.split('_');
+      
+      // Quantization patterns (full tokens, not partial)
+      // Order matters: try longer patterns first
+      const quantPatterns = [
+        /^UD-[A-Z0-9_]+$/i,      // UD-Q4_K_XL, UD-IQ4_NL
+        /^Q[0-9]_[A-Z_]+$/i,     // Q4_K_XL, Q3_K_XL, etc.
+        /^IQ[0-9]_[A-Z_]+$/i,    // IQ4_NL, etc.
+        /^BF16$/i, /^FP16$/i, /^Q8_0$/i,
+        /^[A-Z0-9_]+(?:QL|XL|NL|K_S|K_M|K_L)$/i  // fallback for other quant patterns
+      ];
+      
       let quant = '';
+      let quantParts = [];
       let modelParts = [...parts];
-      const quantPattern = /^(BF16|FP16|Q[0-9]_[A-Z_]+|UD-[A-Z0-9_]+|IQ[0-9]_[A-Z_]+|[A-Z0-9_]+(?:QL|XL|NL|K_S|K_M|K_L))/i;
-      let potentialQuant = [];
+      
+      // Scan from the end: accumulate parts until they match a quant pattern
       for (let i = parts.length - 1; i >= 0; i--) {
-        potentialQuant.unshift(parts[i]);
-        let candidate = potentialQuant.join('_');
-        if (quantPattern.test(candidate)) {
+        quantParts.unshift(parts[i]);
+        let candidate = quantParts.join('_');
+        let matched = quantPatterns.some(pattern => pattern.test(candidate));
+        if (matched) {
           quant = candidate;
           modelParts = parts.slice(0, i);
           break;
         }
       }
+      
+      // If nothing found, assume last part is quant
       if (!quant && parts.length > 1) {
         quant = parts.pop();
         modelParts = parts;
       } else if (!quant) {
         quant = '';
       }
-      let modelName = modelParts.join(' ').replace(/[_-]+/g, ' ').trim();
+      
+      // Model name: join with spaces (underscores become spaces), but preserve original alphanumeric grouping
+      let modelName = modelParts.join(' ').trim();
+      // Capitalize first letter of each word (words separated by spaces)
       modelName = modelName.replace(/\b\w/g, c => c.toUpperCase());
-      modelName = modelName.replace(/([A-Za-z]+)(\d+\.?\d*)/g, '$1 $2');
+      
+      // Quant label: uppercase the original quant string
       let quantLabel = quant.toUpperCase();
+      
       return { modelName, quantLabel };
     }
     
+    // Responsive layout
     function getLayout(n, vw) {
       if (vw < 480) return { cols: 1, cardHeight: Math.round(vw * 0.52) };
       if (vw < 720) return { cols: 2, cardHeight: Math.round((vw / 2) * 0.58) };
@@ -284,18 +309,22 @@ Do not use any dependencies other than Three.js from cdnjs. Everything must work
       const sourceContainer = document.getElementById('jekyll-games-data');
       const targetGrid = document.getElementById('grid');
       if (!sourceContainer || !targetGrid) return;
+      
       const items = sourceContainer.querySelectorAll('.game-data-item');
       if (items.length === 0) {
         targetGrid.innerHTML = '<div class="empty">No game files found in /games/ folder</div>';
         sourceContainer.remove();
         return;
       }
+      
       targetGrid.innerHTML = '';
       items.forEach(item => {
         const url = item.getAttribute('data-url');
         const basename = item.getAttribute('data-basename');
         const jpgUrl = item.getAttribute('data-jpg');
+        
         const { modelName, quantLabel } = parseGameInfo(basename);
+        
         const card = document.createElement('a');
         card.className = 'card';
         card.href = url;
@@ -303,6 +332,7 @@ Do not use any dependencies other than Three.js from cdnjs. Everything must work
         card.style.backgroundImage = jpgUrl ? `url('${jpgUrl}')` : 'linear-gradient(135deg, #1a1a20, #0a0a0f)';
         card.style.backgroundSize = 'cover';
         card.style.backgroundPosition = 'center';
+        
         card.innerHTML = `
           <div class="play-hint"><svg viewBox="0 0 16 16"><path d="M3 2.5l10 5.5-10 5.5z"/></svg></div>
           <div class="card-content">
@@ -345,6 +375,7 @@ Do not use any dependencies other than Three.js from cdnjs. Everything must work
     window.addEventListener('resize', applyLayout);
   </script>
 
+  <!-- Jekyll generates hidden data container with all game info -->
   <div id="jekyll-games-data" style="display: none;">
     {% for file in site.static_files %}
       {% if file.path contains 'games/' and file.extname == '.html' %}

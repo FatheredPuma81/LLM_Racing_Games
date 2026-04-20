@@ -236,51 +236,46 @@ Do not use any dependencies other than Three.js from cdnjs. Everything must work
     function parseGameInfo(basename) {
       // Remove " - Copy" suffix if present
       let clean = basename.replace(/\s*-\s*Copy$/, '');
-      
-      // Split by underscore
       let parts = clean.split('_');
       
-      // Quantization patterns (full tokens, not partial)
-      // Order matters: try longer patterns first
+      // Quantization patterns – order doesn't matter; we'll take longest match
       const quantPatterns = [
-        /^UD-[A-Z0-9_]+$/i,      // UD-Q4_K_XL, UD-IQ4_NL
-        /^Q[0-9]_[A-Z_]+$/i,     // Q4_K_XL, Q3_K_XL, etc.
-        /^IQ[0-9]_[A-Z_]+$/i,    // IQ4_NL, etc.
+        /^UD-[A-Z0-9_]+$/i,           // UD-Q4_K_XL, UD-IQ4_NL
+        /^Q[0-9]_[A-Z_]+$/i,          // Q4_K_XL, Q3_K_XL, Q8_0
+        /^IQ[0-9]_[A-Z_]+$/i,         // IQ4_NL, IQ2_XXS, IQ1_S
         /^BF16$/i, /^FP16$/i, /^Q8_0$/i,
-        /^[A-Z0-9_]+(?:QL|XL|NL|K_S|K_M|K_L)$/i  // fallback for other quant patterns
+        /^[A-Z0-9_]+(?:QL|XL|NL|K_S|K_M|K_L|XXS|XS|S|M|L)$/i  // catch other common suffixes
       ];
       
-      let quant = '';
-      let quantParts = [];
-      let modelParts = [...parts];
+      let bestQuant = '';
+      let bestQuantIndex = parts.length; // index where quant starts
       
-      // Scan from the end: accumulate parts until they match a quant pattern
-      for (let i = parts.length - 1; i >= 0; i--) {
-        quantParts.unshift(parts[i]);
-        let candidate = quantParts.join('_');
-        let matched = quantPatterns.some(pattern => pattern.test(candidate));
-        if (matched) {
-          quant = candidate;
-          modelParts = parts.slice(0, i);
-          break;
+      // Try every suffix (from longest to shortest) and pick the first match
+      for (let i = 0; i < parts.length; i++) {
+        let candidate = parts.slice(i).join('_');
+        if (quantPatterns.some(p => p.test(candidate))) {
+          // Found a quant suffix starting at i
+          if (candidate.length > bestQuant.length) {
+            bestQuant = candidate;
+            bestQuantIndex = i;
+          }
         }
       }
       
-      // If nothing found, assume last part is quant
-      if (!quant && parts.length > 1) {
-        quant = parts.pop();
-        modelParts = parts;
-      } else if (!quant) {
-        quant = '';
+      let modelName = parts.slice(0, bestQuantIndex).join(' ');
+      let quantLabel = bestQuant.toUpperCase();
+      
+      // Fallback: if no quant found, treat last part as quant
+      if (!bestQuant && parts.length > 1) {
+        quantLabel = parts.pop().toUpperCase();
+        modelName = parts.join(' ');
+      } else if (!bestQuant) {
+        quantLabel = '';
+        modelName = parts.join(' ');
       }
       
-      // Model name: join with spaces (underscores become spaces), but preserve original alphanumeric grouping
-      let modelName = modelParts.join(' ').trim();
-      // Capitalize first letter of each word (words separated by spaces)
-      modelName = modelName.replace(/\b\w/g, c => c.toUpperCase());
-      
-      // Quant label: uppercase the original quant string
-      let quantLabel = quant.toUpperCase();
+      // Clean up model name: replace underscores with spaces, trim
+      modelName = modelName.trim();
       
       return { modelName, quantLabel };
     }

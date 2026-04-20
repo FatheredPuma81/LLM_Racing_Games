@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Racing Game</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
+        #hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #lap-counter { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: white; padding: 10px 20px; border-radius: 5px; font-size: 24px; font-weight: bold; }
+        #speedometer { position: absolute; bottom: 20px; right: 20px; background: rgba(0,0,0,0.7); color: white; padding: 10px 20px; border-radius: 5px; font-size: 24px; font-weight: bold; }
+        #speed-label { font-size: 14px; color: #ccc; }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div id="lap-counter">Lap 1/3</div>
+        <div id="speedometer"><span id="speed-value">0</span><span id="speed-label"> units/sec</span></div>
+    </div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>var FIXED_TIMESTEP = 1 / 60;
+var TRACK_WIDTH = 20;
+var MAX_SPEED = 50;
+var ACCELERATION = 30;
+var BRAKING = 40;
+var STEERING_SPEED = 2.5;
+var FRICTION = 0.98;
+
+var TRACK_WAYPOINTS = [
+{ x: 0, z: 0 }, { x: 80, z: 0 }, { x: 150, z: 50 }, { x: 150, z: 150 },
+{ x: 80, z: 200 }, { x: 0, z: 200 }, { x: -80, z: 150 }, { x: -150, z: 100 },
+{ x: -150, z: 0 }, { x: -80, z: -100 }, { x: 0, z: -150 }, { x: 80, z: -100 }
+];
+
+var keys = { w: false, a: false, s: false, d: false, ArrowUp: false, ArrowLeft: false, ArrowDown: false, ArrowRight: false };
+
+var car = {
+position: new THREE.Vector3(0, 1, 0),
+velocity: new THREE.Vector3(0, 0, 0),
+rotation: 0,
+speed: 0
+};
+
+var currentLap = 1;
+var totalLaps = 3;
+var nextCheckpoint = 1;
+
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+scene.fog = new THREE.Fog(0x87CEEB, 50, 300);
+
+var camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+var renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+var ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+
+var directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+directionalLight.position.set(50, 100, 50);
+directionalLight.castShadow = true;
+directionalLight.shadow.camera.left = -150;
+directionalLight.shadow.camera.right = 150;
+directionalLight.shadow.camera.top = 150;
+directionalLight.shadow.camera.bottom = -150;
+directionalLight.shadow.mapSize.width = 2048;
+directionalLight.shadow.mapSize.height = 2048;
+scene.add(directionalLight);
+
+var grassMaterial = new THREE.MeshStandardMaterial({ color: 0x58D68D });
+var grassGeometry = new THREE.PlaneGeometry(800, 800);
+var grass = new THREE.Mesh(grassGeometry, grassMaterial);
+grass.rotation.x = -Math.PI / 2;
+grass.position.y = -0.1;
+scene.add(grass);
+
+var trackGeometry = new THREE.PlaneGeometry(600, 600);
+var trackMaterial = new THREE.MeshStandardMaterial({ color: 0x2C3E50, roughness: 0.7 });
+var track = new THREE.Mesh(trackGeometry, trackMaterial);
+track.rotation.x = -Math.PI / 2;
+track.position.y = 0;
+track.receiveShadow = true;
+scene.add(track);
+
+var centerLineMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
+for (var i = 0; i < 30; i++) {
+var lineGeo = new THREE.PlaneGeometry(4, 8);
+var line = new THREE.Mesh(lineGeo, centerLineMaterial);
+line.rotation.x = -Math.PI / 2;
+line.position.y = 0.02;
+line.position.z = i * 20 - 300;
+scene.add(line);
+}
+
+var boundaryMaterial = new THREE.MeshStandardMaterial({ color: 0xE74C3C });
+
+for (var i = 0; i < TRACK_WAYPOINTS.length; i++) {
+var p1 = TRACK_WAYPOINTS[i];
+var p2 = TRACK_WAYPOINTS[(i + 1) % TRACK_WAYPOINTS.length];
+var dx = p2.x - p1.x;
+var dz = p2.z - p1.z;
+var dist = Math.sqrt(dx * dx + dz * dz);
+var nx = -dz / dist;
+var nz = dx / dist;
+var boundaryWidth = dist;
+var boundaryGeometry = new THREE.PlaneGeometry(boundaryWidth, 2);
+var outerBoundary = new THREE.Mesh(boundaryGeometry, boundaryMaterial.clone());
+outerBoundary.rotation.x = -Math.PI / 2;
+outerBoundary.position.set((p1.x + p2.x) / 2 + nx * TRACK_WIDTH, 0.1, (p1.z + p2.z) / 2 + nz * TRACK_WIDTH);
+outerBoundary.lookAt(p2.x + nx * TRACK_WIDTH, 0, p2.z + nz * TRACK_WIDTH);
+scene.add(outerBoundary);
+var innerBoundary = new THREE.Mesh(boundaryGeometry, boundaryMaterial.clone());
+innerBoundary.rotation.x = -Math.PI / 2;
+innerBoundary.position.set((p1.x + p2.x) / 2 - nx * TRACK_WIDTH, 0.1, (p1.z + p2.z) / 2 - nz * TRACK_WIDTH);
+innerBoundary.lookAt(p2.x - nx * TRACK_WIDTH, 0, p2.z - nz * TRACK_WIDTH);
+scene.add(innerBoundary);
+}
+
+var carGroup = new THREE.Group();
+
+var bodyGeometry = new THREE.BoxGeometry(2, 0.8, 4.5);
+var bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x2E86C1, roughness: 0.3, metalness: 0.4 });
+var carBody = new THREE.Mesh(bodyGeometry, bodyMaterial);
+carBody.position.y = 0.9;
+carBody.castShadow = true;
+carGroup.add(carBody);
+
+var cabinGeometry = new THREE.BoxGeometry(1.6, 0.7, 2.2);
+var cabinMaterial = new THREE.MeshStandardMaterial({ color: 0x5D6D7E, roughness: 0.3, metalness: 0.5 });
+var carCabin = new THREE.Mesh(cabinGeometry, cabinMaterial);
+carCabin.position.y = 1.5;
+carCabin.position.z = -0.3;
+carCabin.castShadow = true;
+carGroup.add(carCabin);
+
+var spoilerGeometry = new THREE.BoxGeometry(2, 0.2, 0.5);
+var spoilerMaterial = new THREE.MeshStandardMaterial({ color: 0xE74C3C, roughness: 0.3 });
+var spoiler = new THREE.Mesh(spoilerGeometry, spoilerMaterial);
+spoiler.position.y = 1.6;
+spoiler.position.z = 2.1;
+carGroup.add(spoiler);
+
+var wheelGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 16);
+var wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.7 });
+var wheels = [{ x: 1.1, z: 1.8 }, { x: -1.1, z: 1.8 }, { x: 1.1, z: -1.8 }, { x: -1.1, z: -1.8 }];
+wheels.forEach(function(pos) {
+var wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+wheel.rotation.z = Math.PI / 2;
+wheel.position.set(pos.x, 0.5, pos.z);
+wheel.castShadow = true;
+carGroup.add(wheel);
+});
+
+var axleGeometry = new THREE.CylinderGeometry(0.15, 0.15, 1.5, 8);
+var axleMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
+var leftAxle = new THREE.Mesh(axleGeometry, axleMaterial);
+leftAxle.rotation.x = Math.PI / 2;
+leftAxle.position.set(0, 0.5, 1.8);
+carGroup.add(leftAxle);
+var rightAxle = new THREE.Mesh(axleGeometry, axleMaterial);
+rightAxle.rotation.x = Math.PI / 2;
+rightAxle.position.set(0, 0.5, -1.8);
+carGroup.add(rightAxle);
+
+scene.add(carGroup);
+
+var cameraOffset = new THREE.Vector3(0, 4, 8);
+
+window.addEventListener('keydown', function(e) { if (keys.hasOwnProperty(e.key)) keys[e.key] = true; });
+window.addEventListener('keyup', function(e) { if (keys.hasOwnProperty(e.key)) keys[e.key] = false; });
+window.addEventListener('resize', function() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+
+function updatePhysics(dt) {
+// Calculate forward direction based on car's rotation
+// At rotation 0, car faces -Z (forward in Three.js)
+var cosR = Math.cos(car.rotation);
+var sinR = Math.sin(car.rotation);
+
+// Forward vector components
+var forwardX = -sinR;
+var forwardZ = -cosR;
+
+if (keys.w || keys.ArrowUp) {
+car.velocity.x += forwardX * ACCELERATION * dt;
+car.velocity.z += forwardZ * ACCELERATION * dt;
+}
+if (keys.s || keys.ArrowDown) {
+car.velocity.x -= forwardX * ACCELERATION * dt;
+car.velocity.z -= forwardZ * ACCELERATION * dt;
+}
+if (keys.a || keys.ArrowLeft) car.rotation += STEERING_SPEED * dt;
+if (keys.d || keys.ArrowRight) car.rotation -= STEERING_SPEED * dt;
+car.position.x += car.velocity.x * dt;
+car.position.z += car.velocity.z * dt;
+car.velocity.x *= FRICTION;
+car.velocity.z *= FRICTION;
+car.speed = Math.sqrt(car.velocity.x * car.velocity.x + car.velocity.z * car.velocity.z);
+if (car.speed > MAX_SPEED) {
+var scale = MAX_SPEED / car.speed;
+car.velocity.x *= scale;
+car.velocity.z *= scale;
+}
+carGroup.position.x = car.position.x;
+carGroup.position.z = car.position.z;
+carGroup.rotation.y = car.rotation;
+var nextWP = TRACK_WAYPOINTS[nextCheckpoint];
+var distToNext = car.position.distanceTo(new THREE.Vector3(nextWP.x, 0, nextWP.z));
+if (distToNext < 15) {
+nextCheckpoint = (nextCheckpoint + 1) % TRACK_WAYPOINTS.length;
+if (nextCheckpoint === 0) { currentLap++; if (currentLap > totalLaps) currentLap = totalLaps; }
+}
+document.getElementById('speed-value').textContent = Math.floor(car.speed);
+document.getElementById('lap-counter').textContent = 'Lap ' + Math.min(currentLap, totalLaps) + '/' + totalLaps;
+}
+
+function checkCollision() {
+var minDist = 9999;
+for (var i = 0; i < TRACK_WAYPOINTS.length; i++) {
+var p1 = TRACK_WAYPOINTS[i];
+var p2 = TRACK_WAYPOINTS[(i + 1) % TRACK_WAYPOINTS.length];
+var dx = p2.x - p1.x;
+var dz = p2.z - p1.z;
+var lenSq = dx * dx + dz * dz;
+var t = Math.max(0, Math.min(1, ((car.position.x - p1.x) * dx + (car.position.z - p1.z) * dz) / lenSq));
+var closestX = p1.x + t * dx;
+var closestZ = p1.z + t * dz;
+var dist = Math.sqrt(Math.pow(car.position.x - closestX, 2) + Math.pow(car.position.z - closestZ, 2));
+minDist = Math.min(minDist, dist);
+}
+if (minDist > TRACK_WIDTH) {
+var pushBack = minDist - TRACK_WIDTH;
+var speed = Math.max(car.speed, 0.001);
+car.position.x -= (car.velocity.x / speed) * pushBack;
+car.position.z -= (car.velocity.z / speed) * pushBack;
+car.velocity.x *= 0.5;
+car.velocity.z *= 0.5;
+}
+}
+
+function updateCamera() {
+var idealOffset = cameraOffset.clone();
+idealOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation);
+var idealPosition = new THREE.Vector3();
+idealPosition.copy(car.position).add(idealOffset);
+camera.position.lerp(idealPosition, 0.1);
+camera.lookAt(car.position.x, car.position.y + 2, car.position.z);
+}
+
+var lastTime = performance.now();
+var accumulator = 0;
+
+function animate() {
+requestAnimationFrame(animate);
+var now = performance.now();
+var dt = (now - lastTime) / 1000;
+lastTime = now;
+if (dt > 0.1) dt = 0.1;
+accumulator += dt;
+if (accumulator >= FIXED_TIMESTEP) {
+updatePhysics(FIXED_TIMESTEP);
+checkCollision();
+accumulator -= FIXED_TIMESTEP;
+}
+updateCamera();
+renderer.render(scene, camera);
+}
+
+animate();</script>
+</body>
+</html>

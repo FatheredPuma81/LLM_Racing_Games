@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Racing Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            z-index: 100;
+        }
+        #lapCounter {
+            font-size: 28px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        #speedometer {
+            font-size: 32px;
+            font-weight: bold;
+        }
+        #speedUnit {
+            font-size: 16px;
+            opacity: 0.8;
+        }
+        #controls {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            font-size: 14px;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div id="lapCounter">LAP: 1 / 5</div>
+        <div id="speedometer"><span id="speedValue">0</span> <span id="speedUnit">km/h</span></div>
+    </div>
+    <div id="controls">WASD or Arrow Keys to drive</div>
+    <canvas id="gameCanvas"></canvas>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // ============================================
+        // FIXED TIMESTEP GAME LOOP
+        // ============================================
+        const FIXED_DT = 1 / 60;
+        const MAX_SUB_STEPS = 10;
+
+        let lastTime = performance.now();
+        let accumulator = 0;
+
+        // ============================================
+        // SCENE SETUP
+        // ============================================
+        const canvas = document.getElementById('gameCanvas');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 100, 500);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 10, -20);
+
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        sunLight.position.set(50, 100, 50);
+        sunLight.castShadow = true;
+        sunLight.shadow.camera.left = -100;
+        sunLight.shadow.camera.right = 100;
+        sunLight.shadow.camera.top = 100;
+        sunLight.shadow.camera.bottom = -100;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        scene.add(sunLight);
+
+        // ============================================
+        // INPUT HANDLING
+        // ============================================
+        const keys = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false
+        };
+
+        document.addEventListener('keydown', (e) => {
+            switch(e.code) {
+                case 'KeyW': case 'ArrowUp': keys.forward = true; break;
+                case 'KeyS': case 'ArrowDown': keys.backward = true; break;
+                case 'KeyA': case 'ArrowLeft': keys.left = true; break;
+                case 'KeyD': case 'ArrowRight': keys.right = true; break;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            switch(e.code) {
+                case 'KeyW': case 'ArrowUp': keys.forward = false; break;
+                case 'KeyS': case 'ArrowDown': keys.backward = false; break;
+                case 'KeyA': case 'ArrowLeft': keys.left = false; break;
+                case 'KeyD': case 'ArrowRight': keys.right = false; break;
+            }
+        });
+
+        // ============================================
+        // CAR CLASS
+        // ============================================
+        class Car {
+            constructor() {
+                this.mesh = new THREE.Group();
+                
+                // Lower body (sporty shape)
+                const bodyGeo = new THREE.BoxGeometry(2.1, 0.5, 4.2);
+                const bodyMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+                const body = new THREE.Mesh(bodyGeo, bodyMat);
+                body.position.y = 0.5;
+                body.castShadow = true;
+                this.mesh.add(body);
+
+                // Upper body/cabin
+                const cabinGeo = new THREE.BoxGeometry(1.7, 0.5, 2.2);
+                const cabinMat = new THREE.MeshPhongMaterial({ color: 0xcc0000 });
+                const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+                cabin.position.y = 1.0;
+                cabin.position.z = -0.2;
+                cabin.castShadow = true;
+                this.mesh.add(cabin);
+
+                // Windshield
+                const windshieldGeo = new THREE.BoxGeometry(1.5, 0.3, 0.1);
+                const glassMat = new THREE.MeshPhongMaterial({ color: 0x87CEEB, transparent: true, opacity: 0.7 });
+                const windshield = new THREE.Mesh(windshieldGeo, glassMat);
+                windshield.position.set(0, 1.35, -0.7);
+                windshield.rotation.x = -0.3;
+                this.mesh.add(windshield);
+
+                // Spoiler
+                const spoilerGeo = new THREE.BoxGeometry(1.8, 0.1, 0.4);
+                const spoilerMat = new THREE.MeshPhongMaterial({ color: 0x111111 });
+                const spoiler = new THREE.Mesh(spoilerGeo, spoilerMat);
+                spoiler.position.set(0, 1.4, 1.8);
+                this.mesh.add(spoiler);
+                
+                const spoilerPostGeo = new THREE.BoxGeometry(0.1, 0.3, 0.1);
+                const spoilerPost1 = new THREE.Mesh(spoilerPostGeo, spoilerMat);
+                spoilerPost1.position.set(-0.6, 1.25, 1.8);
+                this.mesh.add(spoilerPost1);
+                const spoilerPost2 = new THREE.Mesh(spoilerPostGeo, spoilerMat);
+                spoilerPost2.position.set(0.6, 1.25, 1.8);
+                this.mesh.add(spoilerPost2);
+
+                // Wheels
+                this.wheels = [];
+                const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.35, 16);
+                const wheelMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
+                
+                const wheelPositions = [
+                    { x: -1.1, y: 0.4, z: 1.4 },
+                    { x: 1.1, y: 0.4, z: 1.4 },
+                    { x: -1.1, y: 0.4, z: -1.4 },
+                    { x: 1.1, y: 0.4, z: -1.4 }
+                ];
+
+                wheelPositions.forEach((pos, i) => {
+                    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+                    wheel.rotation.z = Math.PI / 2;
+                    wheel.position.set(pos.x, pos.y, pos.z);
+                    wheel.castShadow = true;
+                    this.mesh.add(wheel);
+                    this.wheels.push(wheel);
+                });
+
+                // Headlights
+                const lightGeo = new THREE.BoxGeometry(0.3, 0.2, 0.1);
+                const lightMat = new THREE.MeshPhongMaterial({ color: 0xffffaa, emissive: 0xffffaa, emissiveIntensity: 0.5 });
+                const lightLeft = new THREE.Mesh(lightGeo, lightMat);
+                lightLeft.position.set(-0.6, 0.6, -2.1);
+                this.mesh.add(lightLeft);
+                const lightRight = new THREE.Mesh(lightGeo, lightMat);
+                lightRight.position.set(0.6, 0.6, -2.1);
+                this.mesh.add(lightRight);
+
+                this.mesh.position.set(56, 0, 32);
+                scene.add(this.mesh);
+
+                // Physics properties
+                this.velocity = 0;
+                this.steeringAngle = 0;
+                this.maxSpeed = 1.0;
+                this.acceleration = 0.02;
+                this.brakeForce = 0.05;
+                this.friction = 0.005;
+                this.maxSteering = 0.06;
+                this.steeringSpeed = 0.012;
+            }
+
+            update(dt) {
+                // Handle input
+                if (keys.forward) {
+                    this.velocity += this.acceleration;
+                }
+                if (keys.backward) {
+                    this.velocity -= this.brakeForce;
+                }
+
+                // Apply friction
+                if (Math.abs(this.velocity) < this.friction) {
+                    this.velocity = 0;
+                } else {
+                    if (this.velocity > 0) {
+                        this.velocity -= Math.min(this.friction, this.velocity);
+                    } else if (this.velocity < 0) {
+                        this.velocity += Math.min(this.friction, Math.abs(this.velocity));
+                    }
+                }
+
+                // Cap speed
+                this.velocity = Math.max(-this.maxSpeed / 2, Math.min(this.maxSpeed, this.velocity));
+
+                // Handle steering (only when moving)
+                if (Math.abs(this.velocity) > 0.01) {
+                    const direction = this.velocity > 0 ? 1 : -1;
+                    if (keys.left) {
+                        this.steeringAngle = Math.min(this.steeringAngle + this.steeringSpeed, this.maxSteering);
+                    } else if (keys.right) {
+                        this.steeringAngle = Math.max(this.steeringAngle - this.steeringSpeed, -this.maxSteering);
+                    } else {
+                        this.steeringAngle *= 0.9;
+                    }
+                    this.mesh.rotation.y += this.steeringAngle * direction;
+                } else {
+                    this.steeringAngle *= 0.9;
+                }
+
+                // Update position
+                this.mesh.position.x += Math.sin(this.mesh.rotation.y) * this.velocity;
+                this.mesh.position.z += Math.cos(this.mesh.rotation.y) * this.velocity;
+
+                // Rotate wheels
+                this.wheels[0].rotation.x += this.velocity * 0.2;
+                this.wheels[1].rotation.x += this.velocity * 0.2;
+                this.wheels[2].rotation.x += this.velocity * 0.2;
+                this.wheels[3].rotation.x += this.velocity * 0.2;
+
+                // Front wheel steering visualization
+                this.wheels[0].rotation.y = this.steeringAngle;
+                this.wheels[1].rotation.y = this.steeringAngle;
+            }
+
+            getPosition() {
+                return this.mesh.position;
+            }
+
+            getVelocity() {
+                return Math.abs(this.velocity * 3.6 * 18);
+            }
+        }
+
+        // ============================================
+        // TRACK DIMENSIONS (global for collision)
+        // ============================================
+        const outerRadius = 80;
+        const innerRadius = 50;
+
+        // ============================================
+        // TRACK GENERATION
+        // ============================================
+        function createTrack() {
+            const trackGroup = new THREE.Group();
+
+            // Track dimensions
+            const trackWidth = 12;
+
+            // Ground plane
+            const groundGeo = new THREE.PlaneGeometry(300, 300);
+            const groundMat = new THREE.MeshPhongMaterial({ color: 0x228B22 });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+// Track surface - complex circuit with straights and turns
+            const trackShape = new THREE.Shape();
+            const trackPoints = [];
+            const numTrackPoints = 128;
+            
+            // Create a more interesting track: figure-8 style with varying radii
+            const trackRotation = Math.PI / 6;  // 30 degrees rotation
+            for (let i = 0; i <= numTrackPoints; i++) {
+                const t = i / numTrackPoints;
+                const angle = t * Math.PI * 2;
+                
+                // Varying radius creates interesting turns
+                const radiusMod = 1 + 0.3 * Math.sin(angle * 3);
+                const baseX = Math.cos(angle) * outerRadius * radiusMod;
+                const baseZ = Math.sin(angle) * outerRadius * radiusMod;
+                // Apply track rotation
+                const x = baseX * Math.cos(trackRotation) - baseZ * Math.sin(trackRotation);
+                const z = baseX * Math.sin(trackRotation) + baseZ * Math.cos(trackRotation);
+                
+                if (i === 0) trackShape.moveTo(x, z);
+                else trackShape.lineTo(x, z);
+                trackPoints.push({ x, z, angle });
+            }
+            trackShape.autoClose = false;
+
+            // Inner boundary - also varying
+            const holePath = new THREE.Path();
+            const innerPoints = [];
+            for (let i = 0; i <= numTrackPoints; i++) {
+                const t = i / numTrackPoints;
+                const angle = t * Math.PI * 2;
+                const radiusMod = 1 + 0.3 * Math.sin(angle * 3);
+                const baseX = Math.cos(angle) * innerRadius * radiusMod;
+                const baseZ = Math.sin(angle) * innerRadius * radiusMod;
+                // Apply track rotation
+                const x = baseX * Math.cos(trackRotation) - baseZ * Math.sin(trackRotation);
+                const z = baseX * Math.sin(trackRotation) + baseZ * Math.cos(trackRotation);
+                
+                if (i === 0) holePath.moveTo(x, z);
+                else holePath.lineTo(x, z);
+                innerPoints.push({ x, z, angle });
+            }
+            trackShape.holes.push(holePath);
+
+            const trackGeo = new THREE.ShapeGeometry(trackShape, 128);
+            const trackMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            const track = new THREE.Mesh(trackGeo, trackMat);
+            track.rotation.x = -Math.PI / 2;
+            track.position.y = 0.01;
+            track.receiveShadow = true;
+            scene.add(track);
+
+            // Inner boundary walls - use fewer longer segments for better alignment
+            const wallSegments = 32;
+            for (let w = 0; w < wallSegments; w++) {
+                const startIdx = Math.floor((w / wallSegments) * numTrackPoints);
+                const endIdx = Math.floor(((w + 1) / wallSegments) * numTrackPoints);
+                
+                const p1 = innerPoints[startIdx];
+                const p2 = innerPoints[endIdx];
+                
+                const dx = p2.x - p1.x;
+                const dz = p2.z - p1.z;
+                const length = Math.sqrt(dx * dx + dz * dz);
+                const angle = Math.atan2(dz, dx);
+                
+                // Wall is thin radially (0.3), long along track with overlap
+                const wallGeo = new THREE.BoxGeometry(length + 1.5, 2, 0.3);
+                const wallMat = new THREE.MeshPhongMaterial({ color: 0xff4444 });
+                const wall = new THREE.Mesh(wallGeo, wallMat);
+                
+                const midX = (p1.x + p2.x) / 2;
+                const midZ = (p1.z + p2.z) / 2;
+                wall.position.set(midX, 1, midZ);
+                // Align wall with tangent direction
+                wall.rotation.y = angle;
+                wall.castShadow = true;
+                wall.receiveShadow = true;
+                scene.add(wall);
+                trackGroup.add(wall);
+            }
+
+            // Outer boundary walls - use fewer longer segments for better alignment
+            for (let w = 0; w < wallSegments; w++) {
+                const startIdx = Math.floor((w / wallSegments) * numTrackPoints);
+                const endIdx = Math.floor(((w + 1) / wallSegments) * numTrackPoints);
+                
+                const p1 = trackPoints[startIdx];
+                const p2 = trackPoints[endIdx];
+                
+                const dx = p2.x - p1.x;
+                const dz = p2.z - p1.z;
+                const length = Math.sqrt(dx * dx + dz * dz);
+                const angle = Math.atan2(dz, dx);
+                
+                // Wall is thin radially (0.3), long along track with overlap
+                const wallGeo = new THREE.BoxGeometry(length + 1.5, 2, 0.3);
+                const wallMat = new THREE.MeshPhongMaterial({ color: 0xff4444 });
+                const wall = new THREE.Mesh(wallGeo, wallMat);
+                
+                const midX = (p1.x + p2.x) / 2;
+                const midZ = (p1.z + p2.z) / 2;
+                wall.position.set(midX, 1, midZ);
+                // Align wall with tangent direction
+                wall.rotation.y = angle;
+                wall.castShadow = true;
+                wall.receiveShadow = true;
+                scene.add(wall);
+                trackGroup.add(wall);
+            }
+
+            // Add curb markings along track edges (red and white stripes)
+            const curbCount = 64;
+            for (let c = 0; c < curbCount; c++) {
+                const idx = Math.floor((c / curbCount) * numTrackPoints);
+                const tp = trackPoints[idx];
+                const ip = innerPoints[idx];
+                
+                // Outer curb
+                const outerCurbGeo = new THREE.BoxGeometry(0.8, 0.2, 0.8);
+                const outerCurbColor = c % 2 === 0 ? 0xff0000 : 0xffffff;
+                const outerCurbMat = new THREE.MeshPhongMaterial({ color: outerCurbColor });
+                const outerCurb = new THREE.Mesh(outerCurbGeo, outerCurbMat);
+                const outerCurbX = tp.x + (tp.x - ip.x) * 0.3;
+                const outerCurbZ = tp.z + (tp.z - ip.z) * 0.3;
+                outerCurb.position.set(outerCurbX, 0.12, outerCurbZ);
+                outerCurb.receiveShadow = true;
+                scene.add(outerCurb);
+                
+                // Inner curb
+                const innerCurbGeo = new THREE.BoxGeometry(0.8, 0.2, 0.8);
+                const innerCurbColor = c % 2 === 0 ? 0xffffff : 0xff0000;
+                const innerCurbMat = new THREE.MeshPhongMaterial({ color: innerCurbColor });
+                const innerCurb = new THREE.Mesh(innerCurbGeo, innerCurbMat);
+                const innerCurbX = ip.x - (tp.x - ip.x) * 0.3;
+                const innerCurbZ = ip.z - (tp.z - ip.z) * 0.3;
+                innerCurb.position.set(innerCurbX, 0.12, innerCurbZ);
+                innerCurb.receiveShadow = true;
+                scene.add(innerCurb);
+            }
+
+            // Checkpoints for lap detection - place along the track
+            trackGroup.checkpoints = [];
+            const checkpointCount = 4;
+            for (let i = 0; i < checkpointCount; i++) {
+                const cpIndex = Math.floor((i / checkpointCount) * numTrackPoints);
+                const cp = trackPoints[cpIndex];
+                const innerCp = innerPoints[cpIndex];
+                
+                // Place checkpoint in the middle of the track
+                const cpX = (cp.x + innerCp.x) / 2;
+                const cpZ = (cp.z + innerCp.z) / 2;
+                
+                // Visual checkpoint marker
+                const markerGeo = new THREE.BoxGeometry(0.5, 3, 0.5);
+                const markerMat = new THREE.MeshPhongMaterial({ color: 0xffff00 });
+                const marker = new THREE.Mesh(markerGeo, markerMat);
+                marker.position.set(cpX, 1.5, cpZ);
+                marker.castShadow = true;
+                scene.add(marker);
+
+                trackGroup.checkpoints.push({
+                    x: cpX,
+                    z: cpZ,
+                    angle: cp.angle,
+                    radius: (outerRadius - innerRadius) * 0.5,
+                    passed: false
+                });
+            }
+
+            // Start/finish line at angle 0
+            const startPoint = trackPoints[0];
+            const startInner = innerPoints[0];
+            const startX = (startPoint.x + startInner.x) / 2;
+            const startZ = (startPoint.z + startInner.z) / 2;
+            
+            const lineGeo = new THREE.BoxGeometry(1, 0.1, (outerRadius - innerRadius));
+            const lineMat = new THREE.MeshPhongMaterial({ color: 0xffffff });
+            const line = new THREE.Mesh(lineGeo, lineMat);
+            line.position.set(startX, 0.02, startZ);
+            line.rotation.y = Math.PI / 2;
+            scene.add(line);
+
+            // Store track points for collision detection
+            trackGroup.trackPoints = trackPoints;
+            trackGroup.innerPoints = innerPoints;
+            trackGroup.numTrackPoints = numTrackPoints;
+
+            return trackGroup;
+        }
+
+        const track = createTrack();
+        scene.add(track);
+
+        // Add scenery - trees around the track
+        function createTree(x, z) {
+            const treeGroup = new THREE.Group();
+            
+            // Trunk
+            const trunkGeo = new THREE.CylinderGeometry(0.3, 0.4, 1.5, 8);
+            const trunkMat = new THREE.MeshPhongMaterial({ color: 0x8B4513 });
+            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+            trunk.position.y = 0.75;
+            trunk.castShadow = true;
+            treeGroup.add(trunk);
+            
+            // Foliage (multiple cones for fuller look)
+            const foliageMat = new THREE.MeshPhongMaterial({ color: 0x228B22 });
+            for (let i = 0; i < 3; i++) {
+                const foliageGeo = new THREE.ConeGeometry(1.5 - i * 0.3, 2, 8);
+                const foliage = new THREE.Mesh(foliageGeo, foliageMat);
+                foliage.position.y = 1.5 + i * 0.6;
+                foliage.castShadow = true;
+                treeGroup.add(foliage);
+            }
+            
+            treeGroup.position.set(x, 0, z);
+            scene.add(treeGroup);
+        }
+
+        // Place trees around the track (outside outer boundary)
+        for (let i = 0; i < 40; i++) {
+            const angle = (i / 40) * Math.PI * 2 + 0.3;
+            const radiusMod = 1 + 0.3 * Math.sin(angle * 3);
+            const baseX = Math.cos(angle) * (outerRadius + 15) * radiusMod;
+            const baseZ = Math.sin(angle) * (outerRadius + 15) * radiusMod;
+            const x = baseX * Math.cos(Math.PI / 6) - baseZ * Math.sin(Math.PI / 6);
+            const z = baseX * Math.sin(Math.PI / 6) + baseZ * Math.cos(Math.PI / 6);
+            createTree(x, z);
+        }
+
+        // Add some trees inside the track too
+        for (let i = 0; i < 20; i++) {
+            const angle = (i / 20) * Math.PI * 2 + 1.5;
+            const radius = 25 + (i % 5) * 3;
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+            createTree(x, z);
+        }
+
+        // ============================================
+        // LAP COUNTER SYSTEM
+        // ============================================
+        const totalLaps = 5;
+        let currentLap = 1;
+        let currentCheckpoint = 0;
+        let checkpointsPassedInCurrentLap = 0;
+        const checkpointOrder = [0, 1, 2, 3];
+
+        function checkCheckpoints(carPos) {
+            const checkpoints = track.checkpoints;
+            
+            // Check if we passed the next checkpoint in order
+            const nextCpIndex = (currentCheckpoint + 1) % checkpoints.length;
+            const nextCp = checkpoints[nextCpIndex];
+            
+            const dx = carPos.x - nextCp.x;
+            const dz = carPos.z - nextCp.z;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            
+            // Use a fixed radius that works for the track width
+            const cpRadius = 15;
+            
+            if (distance < cpRadius) {
+                currentCheckpoint = nextCpIndex;
+                checkpointsPassedInCurrentLap++;
+                
+                // Check if we completed a full lap (passed all 4 checkpoints)
+                if (checkpointsPassedInCurrentLap >= 4) {
+                    if (currentLap < totalLaps) {
+                        currentLap++;
+                        checkpointsPassedInCurrentLap = 0;
+                        updateUI();
+                    }
+                }
+            }
+        }
+
+        // ============================================
+        // COLLISION DETECTION
+        // ============================================
+        function checkBoundaries(carPos) {
+            const trackPoints = track.trackPoints;
+            const innerPoints = track.innerPoints;
+            const numPoints = track.numTrackPoints;
+            
+            // Find closest point on track centerline
+            let closestIdx = 0;
+            let closestDist = Infinity;
+            
+            for (let i = 0; i < numPoints; i++) {
+                const tp = trackPoints[i];
+                const ip = innerPoints[i];
+                const centerX = (tp.x + ip.x) / 2;
+                const centerZ = (tp.z + ip.z) / 2;
+                const dx = carPos.x - centerX;
+                const dz = carPos.z - centerZ;
+                const dist = Math.sqrt(dx * dx + dz * dz);
+                
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    closestIdx = i;
+                }
+            }
+            
+            // Get track width at this point
+            const tp = trackPoints[closestIdx];
+            const ip = innerPoints[closestIdx];
+            const trackWidth = Math.sqrt(Math.pow(tp.x - ip.x, 2) + Math.pow(tp.z - ip.z, 2)) / 2;
+            const centerX = (tp.x + ip.x) / 2;
+            const centerZ = (tp.z + ip.z) / 2;
+            
+            // Check if outside track boundaries (with some tolerance)
+            const tolerance = 1.5;
+            if (closestDist > trackWidth + tolerance) {
+                // Push car back toward center
+                const angle = Math.atan2(carPos.z - centerZ, carPos.x - centerX);
+                carPos.x = centerX + Math.cos(angle) * trackWidth;
+                carPos.z = centerZ + Math.sin(angle) * trackWidth;
+                return true;
+            }
+            
+            return false;
+        }
+
+        // ============================================
+        // CAMERA FOLLOW
+        // ============================================
+        const cameraOffset = new THREE.Vector3(0, 8, -15);
+
+        function updateCamera(car) {
+            const carPos = car.getPosition();
+            const carRotation = car.mesh.rotation.y;
+
+            // Calculate desired camera position
+            const desiredPosition = new THREE.Vector3(
+                carPos.x - Math.sin(carRotation) * 15,
+                carPos.y + 8,
+                carPos.z - Math.cos(carRotation) * 15
+            );
+
+            // Smooth follow
+            camera.position.lerp(desiredPosition, 0.1);
+            camera.lookAt(carPos);
+        }
+
+        // ============================================
+        // UI UPDATE
+        // ============================================
+        const lapCounterEl = document.getElementById('lapCounter');
+        const speedValueEl = document.getElementById('speedValue');
+
+        function updateUI() {
+            lapCounterEl.textContent = `LAP: ${currentLap} / ${totalLaps}`;
+        }
+
+        // ============================================
+        // GAME INITIALIZATION
+        // ============================================
+        const car = new Car();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // ============================================
+        // MAIN GAME LOOP
+        // ============================================
+        function gameLoop(currentTime) {
+            const dt = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            accumulator += dt;
+
+            // Fixed timestep update
+            let steps = 0;
+            while (accumulator >= FIXED_DT && steps < MAX_SUB_STEPS) {
+                // Update car physics
+                car.update(FIXED_DT);
+
+                // Check boundaries
+                checkBoundaries(car.getPosition());
+
+                // Check checkpoints
+                checkCheckpoints(car.getPosition());
+
+                // Update camera
+                updateCamera(car);
+
+                // Update speed display
+                speedValueEl.textContent = Math.round(car.getVelocity());
+
+                accumulator -= FIXED_DT;
+                steps++;
+            }
+
+            // Render
+            renderer.render(scene, camera);
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start the game
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>

@@ -1,0 +1,377 @@
+---
+layout: null
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Racing Games</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1rem, 3vw, 1.5rem);
+    }
+
+    h1 {
+      font-size: clamp(1.2rem, 2.5vw, 1.6rem);
+      font-weight: 500;
+      margin-bottom: 0.3rem;
+      color: #fff;
+    }
+
+    .subtitle {
+      font-size: clamp(0.78rem, 1.4vw, 0.88rem);
+      color: #555;
+      margin-bottom: clamp(1.25rem, 2.5vw, 2rem);
+    }
+
+    .grid {
+      display: grid;
+      gap: clamp(0.5rem, 1vw, 0.85rem);
+    }
+
+    a.card {
+      display: block;
+      position: relative;
+      border-radius: clamp(6px, 0.8vw, 10px);
+      overflow: hidden;
+      text-decoration: none;
+      border: 0.5px solid #252525;
+      transition: border-color 0.2s, transform 0.15s;
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+    }
+
+    a.card:hover {
+      border-color: #555;
+      transform: translateY(-2px);
+    }
+
+    a.card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.12) 50%, rgba(0,0,0,0.04) 100%);
+      transition: background 0.2s;
+      pointer-events: none;
+    }
+
+    a.card:hover::after {
+      background: linear-gradient(to top, rgba(0,0,0,0.93) 0%, rgba(0,0,0,0.25) 55%, rgba(0,0,0,0.08) 100%);
+    }
+
+    .play-hint {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: clamp(30px, 3.5vw, 42px);
+      height: clamp(30px, 3.5vw, 42px);
+      border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.22);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.2s;
+      z-index: 2;
+    }
+
+    .play-hint svg {
+      width: clamp(10px, 1.2vw, 15px);
+      height: clamp(10px, 1.2vw, 15px);
+      fill: #fff;
+      margin-left: 2px;
+    }
+
+    a.card:hover .play-hint { opacity: 1; }
+
+    .card-content {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: clamp(0.55rem, 1.2vw, 0.9rem) clamp(0.65rem, 1.2vw, 1rem);
+      z-index: 2;
+    }
+
+    .card-name {
+      font-size: clamp(0.78rem, 1.1vw, 0.95rem);
+      font-weight: 500;
+      color: #fff;
+      margin-bottom: 0.18rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .card-label {
+      font-size: clamp(0.6rem, 0.8vw, 0.7rem);
+      color: #ccc;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      word-break: break-word;
+      white-space: normal;
+      line-height: 1.3;
+    }
+
+    .info-toggle {
+      position: fixed;
+      top: 1.1rem;
+      right: 1.1rem;
+      background: #181818;
+      border: 0.5px solid #2e2e2e;
+      border-radius: 7px;
+      padding: 0.4rem 0.85rem;
+      font-size: 0.8rem;
+      color: #999;
+      cursor: pointer;
+      z-index: 100;
+      transition: border-color 0.15s, color 0.15s;
+      user-select: none;
+    }
+    .info-toggle:hover { border-color: #555; color: #fff; }
+
+    .info-panel {
+      display: none;
+      position: fixed;
+      top: 3.2rem;
+      right: 1.1rem;
+      width: min(460px, calc(100vw - 2.2rem));
+      background: #131313;
+      border: 0.5px solid #2a2a2a;
+      border-radius: 10px;
+      padding: 1.4rem;
+      z-index: 99;
+      overflow-y: auto;
+      max-height: calc(100vh - 4.5rem);
+    }
+    .info-panel.open { display: block; }
+
+    .info-panel h2 { font-size: 0.95rem; font-weight: 500; color: #fff; margin-bottom: 1rem; }
+    .info-panel h3 {
+      font-size: 0.75rem; font-weight: 500; color: #777;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      margin: 1.1rem 0 0.45rem;
+    }
+    .info-panel h3:first-of-type { margin-top: 0; }
+    .info-panel p { font-size: 0.85rem; color: #b0b0b0; line-height: 1.65; margin-bottom: 0.55rem; }
+    .info-panel p:last-child { margin-bottom: 0; }
+    .info-panel code {
+      display: block; background: #0c0c0c; border: 0.5px solid #282828;
+      border-radius: 6px; padding: 0.7rem 0.9rem; font-family: monospace;
+      font-size: 0.78rem; color: #c5c5c5; white-space: pre-wrap;
+      word-break: break-word; margin: 0.35rem 0 0.75rem; line-height: 1.6;
+    }
+    .tag {
+      display: inline-block; background: #1c1c1c; border: 0.5px solid #2e2e2e;
+      border-radius: 5px; padding: 0.18rem 0.5rem; font-size: 0.72rem;
+      color: #888; margin: 0.12rem 0.12rem 0.12rem 0;
+    }
+    .divider { border: none; border-top: 0.5px solid #1e1e1e; margin: 1.1rem 0; }
+    .empty { grid-column: 1/-1; text-align: center; padding: 40px; color: #666; }
+  </style>
+</head>
+<body>
+
+  <h1>LLM Racing Games</h1>
+  <p class="subtitle">Click a card to play</p>
+
+  <button class="info-toggle" onclick="toggleInfo()">How this works ↗</button>
+
+  <div class="info-panel" id="infoPanel">
+    <h2>How these tests were made</h2>
+    <h3>Setup</h3>
+    <p>All tests were run using <strong style="color:#ddd;font-weight:500">OpenCode</strong>. Every model was given 256k context at Q8_0 quantization, except BF16 models which ran at full precision.</p>
+    <hr class="divider">
+    <h3>Step 1 — Plan mode prompt</h3>
+    <p>In Plan mode, send this exact prompt:</p>
+    <code>Create a comprehensive plan for this task:
+Build a 3D racing game in a single HTML file using Three.js from a CDN.
+
+The game must include:
+- A car the player controls with WASD or arrow keys — acceleration, braking, and steering
+- A visible track with boundaries the car cannot pass through
+- A camera that follows behind the car
+- A lap counter that increments when the player completes a loop
+- A speedometer or speed readout visible on screen
+- The game should start immediately on page load with no menu required
+
+Technical requirements:
+- Do not use any dependencies other than Three.js from cdnjs
+- Everything must work by opening the HTML file directly in Microsoft Edge
+- The game loop must be tied to a fixed timestep, not raw frame rate — it must run at the same speed on a 60Hz and 165Hz monitor
+
+Do not use any dependencies other than Three.js from cdnjs. Everything must work by opening the HTML file directly in a browser.</code>
+    <p style="color:#555;font-size:0.78rem">Note: Claude wrote the above prompt. I never read it — blame Claude if you don't like it.</p>
+    <hr class="divider">
+    <h3>Step 2 — Build mode prompt</h3>
+    <p>Switch to Build mode, enable Playwright MCP, then send:</p>
+    <code>Yes implement it. After you are finished thoroughly analyze your implementation for any bugs or errors. Then use Playwright MCP to check for any bugs in the browser.</code>
+    <hr class="divider">
+    <h3>Step 3 — Corrective inputs (3 turns)</h3>
+    <p>Run the HTML output in a browser. Play the game and describe any issues you encounter — for example: <em style="color:#777">"Steering is backwards when driving forward but correct when reversing"</em> or <em style="color:#777">"All I see is a black screen."</em> No hints — just describe what you see. The one exception is you may tell the LLM if the track is a bland donut/circle.</p>
+    <p>If there are <strong style="color:#ddd;font-weight:500">2 or fewer bugs/visual issues</strong> on any of the 3 turns, back up the whole folder, report the issues, then add: <em style="color:#777">"Improve the game in any way it deems fit."</em> All 3 turns are always used.</p>
+    <hr class="divider">
+    <h3>Rules</h3>
+    <span class="tag">Exactly 3 corrective turns</span>
+    <span class="tag">No hints to the LLM</span>
+    <span class="tag">Track hint is the only exception</span>
+    <span class="tag">Final output = final result</span>
+    <span class="tag">If improvements broke it, use the pre-improvement version</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <script>
+    function parseGameInfo(basename) {
+      let clean = basename.replace(/\s*-\s*Copy$/, '');
+      let parts = clean.split('_');
+      let quant = '';
+      let modelParts = [...parts];
+      const quantPattern = /^(BF16|FP16|Q[0-9]_[A-Z_]+|UD-[A-Z0-9_]+|IQ[0-9]_[A-Z_]+|[A-Z0-9_]+(?:QL|XL|NL|K_S|K_M|K_L))/i;
+      let potentialQuant = [];
+      for (let i = parts.length - 1; i >= 0; i--) {
+        potentialQuant.unshift(parts[i]);
+        let candidate = potentialQuant.join('_');
+        if (quantPattern.test(candidate)) {
+          quant = candidate;
+          modelParts = parts.slice(0, i);
+          break;
+        }
+      }
+      if (!quant && parts.length > 1) {
+        quant = parts.pop();
+        modelParts = parts;
+      } else if (!quant) {
+        quant = '';
+      }
+      let modelName = modelParts.join(' ').replace(/[_-]+/g, ' ').trim();
+      modelName = modelName.replace(/\b\w/g, c => c.toUpperCase());
+      modelName = modelName.replace(/([A-Za-z]+)(\d+\.?\d*)/g, '$1 $2');
+      let quantLabel = quant.toUpperCase();
+      return { modelName, quantLabel };
+    }
+    
+    function getLayout(n, vw) {
+      if (vw < 480) return { cols: 1, cardHeight: Math.round(vw * 0.52) };
+      if (vw < 720) return { cols: 2, cardHeight: Math.round((vw / 2) * 0.58) };
+      const cols = n <= 2 ? 2 : n === 3 ? 3 : n === 4 ? 2 : n <= 6 ? 3 : n <= 8 ? 4 : 4;
+      const gap = 12;
+      const cardW = (vw - gap * (cols - 1)) / cols;
+      return { cols, cardHeight: Math.round(cardW * 0.56) };
+    }
+    
+    function applyLayout() {
+      const cards = document.querySelectorAll('#grid .card');
+      if (!cards.length) return;
+      const vw = window.innerWidth;
+      const { cols, cardHeight } = getLayout(cards.length, vw);
+      const grid = document.getElementById('grid');
+      grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      cards.forEach(card => { card.style.height = cardHeight + 'px'; });
+    }
+    
+    function buildCardsFromData() {
+      const sourceContainer = document.getElementById('jekyll-games-data');
+      const targetGrid = document.getElementById('grid');
+      if (!sourceContainer || !targetGrid) return;
+      const items = sourceContainer.querySelectorAll('.game-data-item');
+      if (items.length === 0) {
+        targetGrid.innerHTML = '<div class="empty">No game files found in /games/ folder</div>';
+        sourceContainer.remove();
+        return;
+      }
+      targetGrid.innerHTML = '';
+      items.forEach(item => {
+        const url = item.getAttribute('data-url');
+        const basename = item.getAttribute('data-basename');
+        const jpgUrl = item.getAttribute('data-jpg');
+        const { modelName, quantLabel } = parseGameInfo(basename);
+        const card = document.createElement('a');
+        card.className = 'card';
+        card.href = url;
+        card.target = '_blank';
+        card.style.backgroundImage = jpgUrl ? `url('${jpgUrl}')` : 'linear-gradient(135deg, #1a1a20, #0a0a0f)';
+        card.style.backgroundSize = 'cover';
+        card.style.backgroundPosition = 'center';
+        card.innerHTML = `
+          <div class="play-hint"><svg viewBox="0 0 16 16"><path d="M3 2.5l10 5.5-10 5.5z"/></svg></div>
+          <div class="card-content">
+            <div class="card-name">${escapeHtml(modelName)}</div>
+            <div class="card-label">${escapeHtml(quantLabel)}</div>
+          </div>
+        `;
+        targetGrid.appendChild(card);
+      });
+      sourceContainer.remove();
+      applyLayout();
+    }
+    
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/[&<>]/g, function(m) {
+        if (m === '&') return '&amp;';
+        if (m === '<') return '&lt;';
+        if (m === '>') return '&gt;';
+        return m;
+      });
+    }
+    
+    function toggleInfo() {
+      const panel = document.getElementById('infoPanel');
+      panel.classList.toggle('open');
+      const btn = document.querySelector('.info-toggle');
+      if (btn) btn.textContent = panel.classList.contains('open') ? 'Close ✕' : 'How this works ↗';
+    }
+    
+    document.addEventListener('click', e => {
+      const panel = document.getElementById('infoPanel');
+      const toggle = document.querySelector('.info-toggle');
+      if (panel && toggle && panel.classList.contains('open') && !panel.contains(e.target) && !toggle.contains(e.target)) {
+        panel.classList.remove('open');
+        toggle.textContent = 'How this works ↗';
+      }
+    });
+    
+    window.addEventListener('resize', applyLayout);
+  </script>
+
+  <div id="jekyll-games-data" style="display: none;">
+    {% for file in site.static_files %}
+      {% if file.path contains 'games/' and file.extname == '.html' %}
+        {% assign jpg_exists = false %}
+        {% assign jpg_path = file.path | replace: '.html', '.jpg' %}
+        {% for other in site.static_files %}
+          {% if other.path == jpg_path %}
+            {% assign jpg_exists = true %}
+            {% break %}
+          {% endif %}
+        {% endfor %}
+        <div class="game-data-item"
+             data-url="{{ file.path | relative_url }}"
+             data-basename="{{ file.basename }}"
+             {% if jpg_exists %}data-jpg="{{ jpg_path | relative_url }}"{% endif %}>
+        </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <script>
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', buildCardsFromData);
+    } else {
+      buildCardsFromData();
+    }
+  </script>
+
+</body>
+</html>

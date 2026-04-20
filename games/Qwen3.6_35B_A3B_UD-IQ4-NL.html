@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Racing Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+  canvas { display: block; }
+  #hud {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    padding: 16px 24px;
+    border-radius: 12px;
+    font-size: 16px;
+    line-height: 1.8;
+    pointer-events: none;
+    border: 1px solid rgba(255,255,255,0.15);
+    min-width: 180px;
+    backdrop-filter: blur(8px);
+  }
+  #hud .speed {
+    font-size: 42px;
+    font-weight: 700;
+    color: #00ff88;
+    letter-spacing: -1px;
+  }
+  #hud .speed span {
+    font-size: 14px;
+    color: #aaa;
+    font-weight: 400;
+  }
+  #hud .label { color: #aaa; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  #hud .value { color: #fff; font-weight: 600; }
+  #hud .divider { height: 1px; background: rgba(255,255,255,0.15); margin: 8px 0; }
+  #minimap {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    pointer-events: none;
+  }
+  #controls-hint {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    background: rgba(0,0,0,0.6);
+    color: #aaa;
+    padding: 12px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.8;
+    pointer-events: none;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  #controls-hint kbd {
+    background: rgba(255,255,255,0.15);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+    color: #fff;
+  }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div class="speed" id="speedDisplay">0 <span>km/h</span></div>
+  <div class="divider"></div>
+  <div><span class="label">Lap</span> <span class="value" id="lapDisplay">0</span></div>
+  <div><span class="label">Time</span> <span class="value" id="timeDisplay">00:00.000</span></div>
+  <div><span class="label">Best</span> <span class="value" id="bestDisplay">--:--.---</span></div>
+</div>
+<div id="controls-hint">
+  <kbd>W</kbd> / <kbd>&uarr;</kbd> Accelerate<br>
+  <kbd>S</kbd> / <kbd>&darr;</kbd> Brake / Reverse<br>
+  <kbd>A</kbd> / <kbd>&larr;</kbd> Steer Left<br>
+  <kbd>D</kbd> / <kbd>&rarr;</kbd> Steer Right
+</div>
+<canvas id="minimap" width="200" height="200"></canvas>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// Three.js is loaded as global THREE
+</script>
+<script type="module">
+
+// ============================================================
+// CONSTANTS
+// ============================================================
+const FIXED_DT = 1 / 120;
+const TRACK_WIDTH = 35;
+const TRACK_HALF = TRACK_WIDTH / 2;
+const MAX_SPEED = 80;
+const MAX_REVERSE = -20;
+const ACCELERATION = 30;
+const BRAKING = 35;
+const FRICTION = 0.995;
+const TURN_RATE = 2.5;
+const CAMERA_LERP = 0.06;
+const CAMERA_BEHIND = 14;
+const CAMERA_ABOVE = 7;
+
+// ============================================================
+// TRACK CONTROL POINTS (closed loop)
+// ============================================================
+const CONTROL_POINTS = [
+  new THREE.Vector3(0, 0, 0),
+  new THREE.Vector3(40, 0, -5),
+  new THREE.Vector3(80, 0, 10),
+  new THREE.Vector3(110, 0, 40),
+  new THREE.Vector3(120, 0, 80),
+  new THREE.Vector3(115, 0, 120),
+  new THREE.Vector3(90, 0, 155),
+  new THREE.Vector3(50, 0, 170),
+  new THREE.Vector3(10, 0, 160),
+  new THREE.Vector3(-25, 0, 140),
+  new THREE.Vector3(-55, 0, 155),
+  new THREE.Vector3(-80, 0, 180),
+  new THREE.Vector3(-110, 0, 170),
+  new THREE.Vector3(-140, 0, 140),
+  new THREE.Vector3(-155, 0, 100),
+  new THREE.Vector3(-150, 0, 60),
+  new THREE.Vector3(-130, 0, 25),
+  new THREE.Vector3(-100, 0, 0),
+  new THREE.Vector3(-70, 0, -15),
+  new THREE.Vector3(-35, 0, -20),
+];
+
+// ============================================================
+// CATMULL-ROM SPLINE
+// ============================================================
+function catmullRom(p0, p1, p2, p3, t) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return new THREE.Vector3(
+    0.5 * ((2*p1.x) + (-p0.x+p2.x)*t + (2*p0.x-5*p1.x+4*p2.x-p3.x)*t2 + (-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+    0.5 * ((2*p1.y) + (-p0.y+p2.y)*t + (2*p0.y-5*p1.y+4*p2.y-p3.y)*t2 + (-p0.y+3*p1.y-3*p2.y+p3.y)*t3),
+    0.5 * ((2*p1.z) + (-p0.z+p2.z)*t + (2*p0.z-5*p1.z+4*p2.z-p3.z)*t2 + (-p0.z+3*p1.z-3*p2.z+p3.z)*t3)
+  );
+}
+
+function getSplinePoint(points, t) {
+  const n = points.length;
+  t = ((t % 1) + 1) % 1;
+  const i = Math.floor(t * n);
+  const p0 = points[(i - 1 + n) % n];
+  const p1 = points[i % n];
+  const p2 = points[(i + 1) % n];
+  const p3 = points[(i + 2) % n];
+  return catmullRom(p0, p1, p2, p3, t * n - i);
+}
+
+function getSplineTangent(points, t) {
+  const eps = 0.001;
+  const p1 = getSplinePoint(points, t);
+  const p2 = getSplinePoint(points, t + eps);
+  return p2.sub(p1).normalize();
+}
+
+// Pre-generate spline points for collision
+const SPLINE_SEGMENTS = 4000;
+const splinePoints = [];
+const splineTangents = [];
+for (let i = 0; i < SPLINE_SEGMENTS; i++) {
+  const t = i / SPLINE_SEGMENTS;
+  splinePoints.push(getSplinePoint(CONTROL_POINTS, t));
+  splineTangents.push(getSplineTangent(CONTROL_POINTS, t));
+}
+
+// ============================================================
+// THREE.JS SCENE SETUP
+// ============================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+scene.fog = new THREE.Fog(0x87CEEB, 150, 500);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.5, 800);
+
+// Lights
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambientLight);
+
+const sunLight = new THREE.DirectionalLight(0xfff5e0, 0.9);
+sunLight.position.set(100, 150, 50);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 1024;
+sunLight.shadow.mapSize.height = 1024;
+sunLight.shadow.camera.near = 1;
+sunLight.shadow.camera.far = 600;
+sunLight.shadow.camera.left = -200;
+sunLight.shadow.camera.right = 200;
+sunLight.shadow.camera.top = 200;
+sunLight.shadow.camera.bottom = -200;
+sunLight.shadow.bias = -0.001;
+scene.add(sunLight);
+
+scene.add(new THREE.HemisphereLight(0x87CEEB, 0x3a7d3a, 0.3));
+
+// ============================================================
+// GROUND
+// ============================================================
+const groundGeo = new THREE.PlaneGeometry(800, 800);
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x3a7d3a });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.1;
+ground.receiveShadow = true;
+ground.castShadow = false;
+scene.add(ground);
+
+// ============================================================
+// TRACK GENERATION
+// ============================================================
+function createTrack() {
+  const segments = 400;
+  const vertices = [];
+  const indices = [];
+  const uvs = [];
+
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const center = getSplinePoint(CONTROL_POINTS, t);
+    const tangent = getSplineTangent(CONTROL_POINTS, t);
+    const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+
+    const left = center.clone().add(normal.clone().multiplyScalar(TRACK_HALF));
+    const right = center.clone().sub(normal.clone().multiplyScalar(TRACK_HALF));
+
+    vertices.push(left.x, 0.02, left.z);
+    vertices.push(right.x, 0.02, right.z);
+
+    uvs.push(0, t * 100);
+    uvs.push(1, t * 100);
+
+    if (i < segments) {
+      const base = i * 2;
+      indices.push(base, base + 1, base + 2);
+      indices.push(base + 1, base + 3, base + 2);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  // Road texture via canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#444';
+  ctx.fillRect(0, 0, 64, 64);
+  // Center line dashes
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(30, 0, 4, 20);
+  ctx.fillRect(30, 36, 4, 20);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, segments / 10);
+
+  const roadMat = new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide });
+  const road = new THREE.Mesh(geo, roadMat);
+  road.receiveShadow = true;
+  scene.add(road);
+
+  // Track boundaries - walls
+  const wallMat = new THREE.MeshLambertMaterial({ color: 0xcc3333, side: THREE.DoubleSide });
+  const wallMat2 = new THREE.MeshLambertMaterial({ color: 0xeeeeee, side: THREE.DoubleSide });
+
+  for (let side = -1; side <= 1; side += 2) {
+    const wallVerts = [];
+    const wallIndices = [];
+    const wallHeight = 1.2;
+    const wallSegments = segments;
+
+    for (let i = 0; i <= wallSegments; i++) {
+      const t = i / wallSegments;
+      const center = getSplinePoint(CONTROL_POINTS, t);
+      const tangent = getSplineTangent(CONTROL_POINTS, t);
+      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+      const edge = center.clone().add(normal.clone().multiplyScalar(side * (TRACK_HALF + 0.8)));
+
+      wallVerts.push(edge.x, 0, edge.z);
+      wallVerts.push(edge.x, wallHeight, edge.z);
+
+      if (i < wallSegments) {
+        const base = i * 2;
+        wallIndices.push(base, base + 1, base + 2);
+        wallIndices.push(base + 1, base + 3, base + 2);
+      }
+    }
+
+    const wallGeo = new THREE.BufferGeometry();
+    wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wallVerts, 3));
+    wallGeo.setIndex(wallIndices);
+    wallGeo.computeVertexNormals();
+
+    const wall = new THREE.Mesh(wallGeo, side === -1 ? wallMat : wallMat2);
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    scene.add(wall);
+  }
+
+  // Start/finish line - raised slightly to avoid z-fighting
+  const startCenter = getSplinePoint(CONTROL_POINTS, 0);
+  const startTangent = getSplineTangent(CONTROL_POINTS, 0);
+
+  const startCanvas = document.createElement('canvas');
+  startCanvas.width = 256;
+  startCanvas.height = 64;
+  const sctx = startCanvas.getContext('2d');
+  sctx.fillStyle = '#333';
+  sctx.fillRect(0, 0, 256, 64);
+  const squareW = 32;
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 8; c++) {
+      sctx.fillStyle = (r + c) % 2 === 0 ? '#fff' : '#111';
+      sctx.fillRect(c * squareW, r * squareW, squareW, squareW);
+    }
+  }
+  const startTex = new THREE.CanvasTexture(startCanvas);
+  const startGeo = new THREE.PlaneGeometry(TRACK_WIDTH, 4);
+  const startMat = new THREE.MeshLambertMaterial({ map: startTex, side: THREE.DoubleSide });
+  const startLine = new THREE.Mesh(startGeo, startMat);
+  startLine.rotation.x = -Math.PI / 2;
+  startLine.position.copy(startCenter);
+  startLine.position.y = 0.06;
+  startLine.rotation.z = -Math.atan2(startTangent.x, startTangent.z);
+  scene.add(startLine);
+
+  return { road, startCenter, startTangent };
+}
+
+const track = createTrack();
+
+// ============================================================
+// DECORATIVE OBJECTS
+// ============================================================
+function createTree(x, z) {
+  const group = new THREE.Group();
+  const trunkGeo = new THREE.CylinderGeometry(0.3, 0.4, 3, 6);
+  const trunkMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+  const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+  trunk.position.y = 1.5;
+  trunk.castShadow = true;
+  group.add(trunk);
+
+  const leavesGeo = new THREE.ConeGeometry(2.5, 5, 8);
+  const leavesMat = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+  const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+  leaves.position.y = 5;
+  leaves.castShadow = true;
+  group.add(leaves);
+
+  group.position.set(x, 0, z);
+  scene.add(group);
+}
+
+function createPole(x, z) {
+  const poleGeo = new THREE.CylinderGeometry(0.15, 0.15, 4, 6);
+  const poleMat = new THREE.MeshLambertMaterial({ color: 0xcc3333 });
+  const pole = new THREE.Mesh(poleGeo, poleMat);
+  pole.position.set(x, 2, z);
+  pole.castShadow = true;
+  scene.add(pole);
+
+  // White stripe
+  const stripeGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.5, 6);
+  const stripeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+  stripe.position.set(x, 2.5, z);
+  scene.add(stripe);
+}
+
+// Scatter trees and poles around the track
+const treePositions = [
+  [180, 50], [200, -30], [190, 120], [-180, -30], [-180, 80],
+  [-180, 160], [50, 220], [-50, 220], [150, 200], [-120, -60],
+  [80, -60], [160, 160], [-60, 200], [100, -40], [-160, 120],
+  [200, 180], [-200, 100], [250, 80], [-250, 50],
+  [100, 250], [-100, 250], [0, 250], [300, 0], [-300, 100],
+  [250, 150], [-250, 150],
+];
+
+for (const [x, z] of treePositions) {
+  createTree(x, z);
+}
+
+// Poles along outer boundary
+const poleCount = 60;
+for (let i = 0; i < poleCount; i++) {
+  const t = i / poleCount;
+  const center = getSplinePoint(CONTROL_POINTS, t);
+  const tangent = getSplineTangent(CONTROL_POINTS, t);
+  const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+  const edge = center.clone().add(normal.clone().multiplyScalar(TRACK_HALF + 4));
+  createPole(edge.x, edge.z);
+}
+
+// ============================================================
+// CAR
+// ============================================================
+function createCar() {
+  const car = new THREE.Group();
+
+  // Main body - long axis is X (front=+X, back=-X)
+  const bodyGeo = new THREE.BoxGeometry(4.5, 1, 2);
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0xd42a2a });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 0.7;
+  body.castShadow = true;
+  car.add(body);
+
+  // Cabin
+  const cabinGeo = new THREE.BoxGeometry(2, 0.8, 1.7);
+  const cabinMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
+  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+  cabin.position.set(0.3, 1.5, 0);
+  cabin.castShadow = true;
+  car.add(cabin);
+
+  // Spoiler at the BACK (-X side)
+  const spoilerGeo = new THREE.BoxGeometry(0.3, 0.1, 2);
+  const spoilerMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+  const spoiler = new THREE.Mesh(spoilerGeo, spoilerMat);
+  spoiler.position.set(-2.0, 1.4, 0);
+  car.add(spoiler);
+
+  const spoilerStandGeo = new THREE.BoxGeometry(0.2, 0.4, 0.1);
+  const stand1 = new THREE.Mesh(spoilerStandGeo, spoilerMat);
+  stand1.position.set(-2.1, 1.15, 0.7);
+  car.add(stand1);
+  const stand2 = new THREE.Mesh(spoilerStandGeo, spoilerMat);
+  stand2.position.set(-2.1, 1.15, -0.7);
+  car.add(stand2);
+
+  // Wheels - torus shape for realistic wheel appearance
+  const wheelGeo = new THREE.TorusGeometry(0.35, 0.15, 8, 16);
+  const wheelMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
+  const wheelPositions = [
+    [1.4, 0.35, 1.1], [1.4, 0.35, -1.1],
+    [-1.4, 0.35, 1.1], [-1.4, 0.35, -1.1]
+  ];
+  for (const [wx, wy, wz] of wheelPositions) {
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.position.set(wx, wy, wz);
+    wheel.castShadow = true;
+    car.add(wheel);
+  }
+
+  // Headlights
+  const lightGeo = new THREE.SphereGeometry(0.15, 8, 8);
+  const lightMat = new THREE.MeshLambertMaterial({ color: 0xffffcc, emissive: 0xffffcc, emissiveIntensity: 0.5 });
+  const hl1 = new THREE.Mesh(lightGeo, lightMat);
+  hl1.position.set(2.3, 0.7, 0.7);
+  car.add(hl1);
+  const hl2 = new THREE.Mesh(lightGeo, lightMat);
+  hl2.position.set(2.3, 0.7, -0.7);
+  car.add(hl2);
+
+  // Tail lights
+  const tailMat = new THREE.MeshLambertMaterial({ color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 0.3 });
+  const tl1 = new THREE.Mesh(lightGeo, tailMat);
+  tl1.position.set(-2.3, 0.7, 0.7);
+  car.add(tl1);
+  const tl2 = new THREE.Mesh(lightGeo, tailMat);
+  tl2.position.set(-2.3, 0.7, -0.7);
+  car.add(tl2);
+
+  return car;
+}
+
+const carMesh = createCar();
+scene.add(carMesh);
+
+// ============================================================
+// CAR PHYSICS STATE
+// ============================================================
+const car = {
+  position: track.startCenter.clone(),
+  angle: 0,
+  speed: 0,
+  angularVelocity: 0,
+};
+
+// Set initial angle to face forward along track
+const startTangent = track.startTangent;
+car.angle = Math.atan2(startTangent.x, startTangent.z);
+carMesh.position.copy(car.position);
+carMesh.rotation.y = car.angle - Math.PI / 2;
+
+// ============================================================
+// INPUT
+// ============================================================
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  e.preventDefault();
+});
+window.addEventListener('keyup', (e) => {
+  keys[e.code] = false;
+  e.preventDefault();
+});
+
+// ============================================================
+// COLLISION DETECTION
+// ============================================================
+function getClosestSplinePoint(pos) {
+  let minDist = Infinity;
+  let closestIdx = 0;
+  for (let i = 0; i < SPLINE_SEGMENTS; i++) {
+    const dp = splinePoints[i];
+    const dx = pos.x - dp.x;
+    const dz = pos.z - dp.z;
+    const dist = dx * dx + dz * dz;
+    if (dist < minDist) {
+      minDist = dist;
+      closestIdx = i;
+    }
+  }
+  return { distance: Math.sqrt(minDist), index: closestIdx, point: splinePoints[closestIdx] };
+}
+
+function handleCollision() {
+  const closest = getClosestSplinePoint(car.position);
+  const collisionThreshold = TRACK_HALF + 8;
+
+  if (closest.distance > collisionThreshold) {
+    // Very gentle push back toward center
+    const pushDir = closest.point.clone().sub(car.position).normalize();
+    const pushAmount = (closest.distance - TRACK_HALF) * 0.15;
+    car.position.x += pushDir.x * pushAmount;
+    car.position.z += pushDir.z * pushAmount;
+    car.speed *= 0.95;
+  }
+}
+
+// ============================================================
+// CHECKPOINTS & LAP TRACKING
+// ============================================================
+const CHECKPOINT_COUNT = 8;
+const checkpoints = [];
+for (let i = 0; i < CHECKPOINT_COUNT; i++) {
+  checkpoints.push(getSplinePoint(CONTROL_POINTS, i / CHECKPOINT_COUNT));
+}
+
+let currentCheckpoint = 0;
+let lapCount = 0;
+let lapStartTime = 0;
+let currentLapTime = 0;
+let bestLapTime = Infinity;
+let firstLapTime = 0;
+let raceStarted = false;
+
+function checkCheckpoints() {
+  const cp = checkpoints[currentCheckpoint];
+  const dx = car.position.x - cp.x;
+  const dz = car.position.z - cp.z;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+
+  if (dist < 30) {
+    currentCheckpoint++;
+    if (currentCheckpoint >= CHECKPOINT_COUNT) {
+      currentCheckpoint = 0;
+      lapCount++;
+
+      if (firstLapTime === 0) {
+        firstLapTime = currentLapTime;
+      } else if (currentLapTime < bestLapTime) {
+        bestLapTime = currentLapTime;
+      }
+      lapStartTime = performance.now();
+    }
+  }
+}
+
+// ============================================================
+// CAMERA
+// ============================================================
+const cameraTarget = new THREE.Vector3();
+const cameraOffset = new THREE.Vector3(0, CAMERA_ABOVE, -CAMERA_BEHIND);
+
+function updateCamera() {
+  const forward = new THREE.Vector3(Math.sin(car.angle), 0, Math.cos(car.angle));
+  const targetPos = car.position.clone()
+    .add(forward.clone().multiplyScalar(-CAMERA_BEHIND))
+    .add(new THREE.Vector3(0, CAMERA_ABOVE, 0));
+
+  camera.position.lerp(targetPos, CAMERA_LERP);
+  camera.lookAt(car.position.x, car.position.y + 2, car.position.z);
+
+  // Update sun shadow camera to follow car
+  sunLight.position.set(car.position.x + 100, 150, car.position.z + 50);
+  sunLight.target.position.copy(car.position);
+  sunLight.target.updateMatrixWorld();
+}
+
+// ============================================================
+// HUD
+// ============================================================
+const speedDisplay = document.getElementById('speedDisplay');
+const lapDisplay = document.getElementById('lapDisplay');
+const timeDisplay = document.getElementById('timeDisplay');
+const bestDisplay = document.getElementById('bestDisplay');
+
+function formatTime(ms) {
+  if (ms === 0 || ms === Infinity) return '--:--.---';
+  const totalSec = ms / 1000;
+  const min = Math.floor(totalSec / 60);
+  const sec = Math.floor(totalSec % 60);
+  const millis = Math.floor(ms % 1000);
+  return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+}
+
+function updateHUD() {
+  const kmh = Math.abs(Math.round(car.speed * 2));
+  speedDisplay.innerHTML = `${kmh} <span>km/h</span>`;
+  lapDisplay.textContent = lapCount;
+  timeDisplay.textContent = formatTime(currentLapTime);
+  bestDisplay.textContent = formatTime(bestLapTime);
+}
+
+// ============================================================
+// MINIMAP
+// ============================================================
+const minimapCanvas = document.getElementById('minimap');
+const minimapCtx = minimapCanvas.getContext('2d');
+const MAP_SIZE = 200;
+const MAP_SCALE = 0.35;
+
+function drawMinimap() {
+  minimapCtx.clearRect(0, 0, MAP_SIZE, MAP_SIZE);
+
+  // Background circle
+  minimapCtx.fillStyle = 'rgba(0,0,0,0.6)';
+  minimapCtx.beginPath();
+  minimapCtx.arc(MAP_SIZE/2, MAP_SIZE/2, MAP_SIZE/2 - 2, 0, Math.PI * 2);
+  minimapCtx.fill();
+
+  // Track (centered on car)
+  const cx = car.position.x;
+  const cz = car.position.z;
+  minimapCtx.strokeStyle = '#555';
+  minimapCtx.lineWidth = 12;
+  minimapCtx.lineCap = 'round';
+  minimapCtx.lineJoin = 'round';
+  minimapCtx.beginPath();
+  for (let i = 0; i <= 300; i++) {
+    const t = i / 300;
+    const p = getSplinePoint(CONTROL_POINTS, t);
+    const mx = (p.x - cx) * MAP_SCALE + MAP_SIZE / 2;
+    const my = (p.z - cz) * MAP_SCALE + MAP_SIZE / 2;
+    if (i === 0) minimapCtx.moveTo(mx, my);
+    else minimapCtx.lineTo(mx, my);
+  }
+  minimapCtx.closePath();
+  minimapCtx.stroke();
+
+  // Road surface (thinner, lighter)
+  minimapCtx.strokeStyle = '#999';
+  minimapCtx.lineWidth = 8;
+  minimapCtx.stroke();
+
+  // Checkpoints (centered on car)
+  for (let i = 0; i < CHECKPOINT_COUNT; i++) {
+    const cp = checkpoints[i];
+    const mx = (cp.x - cx) * MAP_SCALE + MAP_SIZE / 2;
+    const my = (cp.z - cz) * MAP_SCALE + MAP_SIZE / 2;
+    minimapCtx.fillStyle = i === currentCheckpoint ? '#00ff88' : '#888';
+    minimapCtx.beginPath();
+    minimapCtx.arc(mx, my, 3, 0, Math.PI * 2);
+    minimapCtx.fill();
+  }
+
+  // Car (always at center of minimap)
+  minimapCtx.fillStyle = '#ff3333';
+  minimapCtx.beginPath();
+  minimapCtx.arc(MAP_SIZE / 2, MAP_SIZE / 2, 5, 0, Math.PI * 2);
+  minimapCtx.fill();
+
+  // Car direction indicator (points in movement direction)
+  const dirLen = 15;
+  const dirX = MAP_SIZE / 2 + Math.sin(car.angle) * dirLen;
+  const dirY = MAP_SIZE / 2 + Math.cos(car.angle) * dirLen;
+  minimapCtx.strokeStyle = '#ff3333';
+  minimapCtx.lineWidth = 2;
+  minimapCtx.beginPath();
+  minimapCtx.moveTo(MAP_SIZE / 2, MAP_SIZE / 2);
+  minimapCtx.lineTo(dirX, dirY);
+  minimapCtx.stroke();
+}
+
+// ============================================================
+// RESIZE
+// ============================================================
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+let lastTime = performance.now();
+let accumulator = 0;
+let frameCount = 0;
+
+function updatePhysics() {
+  // Input
+  const accelInput = (keys['KeyW'] || keys['ArrowUp']) ? 1 : (keys['KeyS'] || keys['ArrowDown']) ? -1 : 0;
+  const steerInput = (keys['KeyA'] || keys['ArrowLeft']) ? -1 : (keys['KeyD'] || keys['ArrowRight']) ? 1 : 0;
+
+  // Acceleration / braking
+  if (accelInput > 0) {
+    car.speed += ACCELERATION * FIXED_DT;
+  } else if (accelInput < 0) {
+    if (car.speed > 0.5) {
+      car.speed -= BRAKING * FIXED_DT;
+    } else {
+      car.speed -= ACCELERATION * FIXED_DT * 0.5;
+    }
+  }
+
+  // Speed limits
+  car.speed = Math.max(MAX_REVERSE, Math.min(MAX_SPEED, car.speed));
+
+  // Friction
+  car.speed *= Math.pow(FRICTION, 1);
+
+  // Steering
+  if (Math.abs(car.speed) > 0.5) {
+    const steerAmount = steerInput * TURN_RATE * FIXED_DT * Math.min(Math.abs(car.speed) / 10, 1);
+    car.angle += steerAmount;
+  }
+
+  // Update position
+  car.position.x += Math.sin(car.angle) * car.speed * FIXED_DT;
+  car.position.z += Math.cos(car.angle) * car.speed * FIXED_DT;
+
+  // Collision
+  handleCollision();
+
+  // Checkpoints
+  checkCheckpoints();
+
+  // Update car mesh (car's local +X is front, physics moves in direction (sin(angle), cos(angle)))
+  carMesh.position.copy(car.position);
+  carMesh.rotation.y = car.angle - Math.PI / 2;
+
+  // Lap timing
+  const now = performance.now();
+  if (!raceStarted && car.speed > 2) {
+    raceStarted = true;
+    lapStartTime = now;
+  }
+  if (raceStarted) {
+    currentLapTime = now - lapStartTime;
+  }
+}
+
+function render() {
+  updateCamera();
+  updateHUD();
+  drawMinimap();
+  renderer.render(scene, camera);
+}
+
+function gameLoop(timestamp) {
+  frameCount++;
+  requestAnimationFrame(gameLoop);
+  render();
+}
+
+// Use setInterval for physics to avoid browser throttling when tab is not focused
+// This runs at ~120Hz regardless of browser tab focus
+const PHYSICS_INTERVAL = Math.round(1000 / 120);
+setInterval(() => {
+  let now = performance.now();
+  let frameTime = (now - lastTime) / 1000;
+  lastTime = now;
+  if (frameTime > 0.25) frameTime = 0.25;
+  accumulator += frameTime;
+  let steps = 0;
+  while (accumulator >= FIXED_DT && steps < 10) {
+    updatePhysics();
+    accumulator -= FIXED_DT;
+    steps++;
+  }
+}, PHYSICS_INTERVAL);
+
+// Start
+lastTime = performance.now();
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>

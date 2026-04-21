@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Racing Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+            background: #87CEEB;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #speedometer {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            min-width: 200px;
+        }
+
+        #speedometer h2 {
+            font-size: 18px;
+            margin-bottom: 10px;
+            color: #00ff00;
+        }
+
+        #speed-value {
+            font-size: 36px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        #speed-unit {
+            font-size: 16px;
+            color: #aaaaaa;
+        }
+
+        #lap-counter {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            text-align: right;
+        }
+
+        #lap-counter h2 {
+            font-size: 18px;
+            margin-bottom: 10px;
+            color: #00ff00;
+        }
+
+        .lap-info {
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+            font-size: 14px;
+        }
+
+        #controls h3 {
+            margin-bottom: 10px;
+            color: #00ff00;
+        }
+
+        .control-key {
+            display: inline-block;
+            background: #444;
+            padding: 5px 10px;
+            border-radius: 5px;
+            margin: 2px;
+            border: 1px solid #666;
+        }
+
+        #race-complete {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 40px;
+            border-radius: 20px;
+            color: white;
+            text-align: center;
+            display: none;
+        }
+
+        #race-complete h1 {
+            font-size: 48px;
+            color: #00ff00;
+            margin-bottom: 20px;
+        }
+
+        #race-complete p {
+            font-size: 24px;
+            margin-bottom: 30px;
+        }
+
+        #restart-btn {
+            background: #00ff00;
+            color: black;
+            border: none;
+            padding: 15px 40px;
+            font-size: 20px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        #restart-btn:hover {
+            background: #00cc00;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="speedometer">
+            <h2>Speed</h2>
+            <div id="speed-value">0</div>
+            <div id="speed-unit">km/h</div>
+        </div>
+
+        <div id="lap-counter">
+            <h2>Laps</h2>
+            <div class="lap-info">
+                <div>Current: <span id="current-lap">1</span> / <span id="total-laps">3</span></div>
+                <div style="margin-top: 10px;">Progress: <span id="lap-progress">0</span>%</div>
+            </div>
+        </div>
+
+        <div id="controls">
+            <h3>Controls</h3>
+            <div><span class="control-key">W</span> or <span class="control-key">↑</span> Accelerate</div>
+            <div><span class="control-key">S</span> or <span class="control-key">↓</span> Brake / Reverse</div>
+            <div><span class="control-key">A</span> or <span class="control-key">←</span> Turn Left</div>
+            <div><span class="control-key">D</span> or <span class="control-key">→</span> Turn Right</div>
+        </div>
+
+        <div id="race-complete">
+            <h1>RACE COMPLETE!</h1>
+            <p>You finished the race!</p>
+            <button id="restart-btn">Play Again</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Game state
+        const gameState = {
+            speed: 0,
+            maxSpeed: 60,
+            acceleration: 50,
+            reverseSpeed: -20,
+            braking: -40,
+            friction: 0,
+            steeringSpeed: 4,
+            currentLap: 1,
+            totalLaps: 3,
+            lapProgress: 0,
+            raceFinished: false
+        };
+
+        // Input state
+        const input = {
+            forward: false,
+            backward: false,
+            reverse: false,
+            left: false,
+            right: false
+        };
+
+        // Fixed timestep variables
+        let accumulator = 0;
+        const fixedDeltaTime = 1 / 60;
+        let lastTime = performance.now();
+
+        // Three.js variables
+        let scene, camera, renderer;
+        let car, trackMesh, outerWall;
+        let trackCurve;
+
+        function init() {
+            // Reset speed immediately
+            gameState.speed = 0;
+
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            scene.fog = new THREE.Fog(0x87CEEB, 50, 150);
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(50, 100, 50);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 500;
+            directionalLight.shadow.camera.left = -100;
+            directionalLight.shadow.camera.right = 100;
+            directionalLight.shadow.camera.top = 100;
+            directionalLight.shadow.camera.bottom = -100;
+            scene.add(directionalLight);
+
+            // Create game objects
+            createTrack();
+            createCar();
+
+            // Event listeners
+            setupInputHandlers();
+
+            document.getElementById('restart-btn').addEventListener('click', restartGame);
+
+            // Start game loop
+            requestAnimationFrame(gameLoop);
+        }
+
+        function createTrack() {
+            // Create track path using CatmullRomCurve3
+            const trackPoints = [];
+            const trackRadius = 50;
+            const trackWidth = 8;
+            const numPoints = 20;
+
+            for (let i = 0; i <= numPoints; i++) {
+                const angle = (i / numPoints) * Math.PI * 2;
+                const x = Math.cos(angle) * trackRadius;
+                const z = Math.sin(angle) * trackRadius;
+                trackPoints.push(new THREE.Vector3(x, 0, z));
+            }
+
+            trackCurve = new THREE.CatmullRomCurve3(trackPoints);
+            trackCurve.closed = true;
+
+            // Create track surface
+            const trackGeometry = new THREE.TubeGeometry(trackCurve, 100, trackWidth / 2, 16, true);
+            const trackMaterial = new THREE.MeshStandardMaterial({
+                color: 0x333333,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            trackMesh = new THREE.Mesh(trackGeometry, trackMaterial);
+            trackMesh.rotation.x = Math.PI / 2;
+            trackMesh.receiveShadow = true;
+            scene.add(trackMesh);
+
+            // Create outer wall
+            const wallGeometry = new THREE.TubeGeometry(trackCurve, 100, trackWidth / 2 + 2, 16, true);
+            const wallMaterial = new THREE.MeshStandardMaterial({
+                color: 0xff4500,
+                roughness: 0.7,
+                metalness: 0.3
+            });
+            outerWall = new THREE.Mesh(wallGeometry, wallMaterial);
+            outerWall.rotation.x = Math.PI / 2;
+            outerWall.castShadow = true;
+            scene.add(outerWall);
+
+            // Create ground plane
+            const groundGeometry = new THREE.PlaneGeometry(200, 200);
+            const groundMaterial = new THREE.MeshStandardMaterial({
+                color: 0x228B22,
+                roughness: 1,
+                metalness: 0
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Create start line
+            const startPoint = trackCurve.getPointAt(0);
+            const startLineGeometry = new THREE.PlaneGeometry(trackWidth, 4);
+            const startLineMaterial = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                side: THREE.DoubleSide
+            });
+            const startLine = new THREE.Mesh(startLineGeometry, startLineMaterial);
+            startLine.rotation.x = -Math.PI / 2;
+            startLine.position.copy(startPoint);
+            startLine.position.y = 0.01;
+            scene.add(startLine);
+        }
+
+        function createCar() {
+            const carGroup = new THREE.Group();
+
+            // Car body
+            const bodyGeometry = new THREE.BoxGeometry(2, 1, 3);
+            const bodyMaterial = new THREE.MeshStandardMaterial({
+                color: 0x00ff00,
+                roughness: 0.3,
+                metalness: 0.5
+            });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.8;
+            body.castShadow = true;
+            carGroup.add(body);
+
+            // Car cabin
+            const cabinGeometry = new THREE.BoxGeometry(1.6, 0.6, 1.5);
+            const cabinMaterial = new THREE.MeshStandardMaterial({
+                color: 0x111111,
+                roughness: 0.2,
+                metalness: 0.8
+            });
+            const cabin = new THREE.Mesh(cabinGeometry, cabinMaterial);
+            cabin.position.set(0, 1.3, 0.2);
+            carGroup.add(cabin);
+
+            // Wheels
+            const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+            const wheelMaterial = new THREE.MeshStandardMaterial({
+                color: 0x333333,
+                roughness: 0.8
+            });
+
+            const wheelPositions = [
+                [-0.8, 0.4, 1],
+                [0.8, 0.4, 1],
+                [-0.8, 0.4, -1],
+                [0.8, 0.4, -1]
+            ];
+
+            wheelPositions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+                wheel.rotation.z = Math.PI / 2;
+                wheel.position.set(...pos);
+                wheel.castShadow = true;
+                carGroup.add(wheel);
+            });
+
+            scene.add(carGroup);
+            car = carGroup;
+        }
+
+        function setupInputHandlers() {
+            document.addEventListener('keydown', (e) => {
+                switch(e.key.toLowerCase()) {
+                    case 'w':
+                    case 'arrowup':
+                        input.forward = true;
+                        input.backward = false;
+                        input.reverse = false;
+                        break;
+                    case 's':
+                    case 'arrowdown':
+                        input.backward = true;
+                        input.forward = false;
+                        input.reverse = false;
+                        break;
+                    case 'a':
+                    case 'arrowleft':
+                        input.left = true;
+                        break;
+                    case 'd':
+                    case 'arrowright':
+                        input.right = true;
+                        break;
+                }
+            });
+
+            document.addEventListener('keyup', (e) => {
+                switch(e.key.toLowerCase()) {
+                    case 'w':
+                    case 'arrowup':
+                        input.forward = false;
+                        break;
+                    case 's':
+                    case 'arrowdown':
+                        input.backward = false;
+                        break;
+                    case 'a':
+                    case 'arrowleft':
+                        input.left = false;
+                        break;
+                    case 'd':
+                    case 'arrowright':
+                        input.right = false;
+                        break;
+                }
+            });
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        function updatePhysics(dt) {
+            if (gameState.raceFinished) return;
+
+            // Update car physics
+            if (input.forward) {
+                gameState.speed += gameState.acceleration * dt;
+            }
+
+            if (input.backward) {
+                gameState.speed += gameState.reverseSpeed * dt;
+            }
+
+            if (input.reverse) {
+                gameState.speed += gameState.reverseSpeed * dt;
+            }
+
+            // Apply friction
+            gameState.speed += gameState.friction * dt;
+
+            // Clamp speed
+            gameState.speed = Math.max(gameState.reverseSpeed, Math.min(gameState.speed, gameState.maxSpeed));
+
+            // Steering
+            const turnAmount = gameState.steeringSpeed * dt;
+            if (input.left) {
+                car.rotation.y -= turnAmount;
+            }
+            if (input.right) {
+                car.rotation.y += turnAmount;
+            }
+
+            // Move car
+            const direction = new THREE.Vector3(0, 0, 1);
+            direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+            car.position.add(direction.multiplyScalar(gameState.speed * dt));
+
+            // Update lap progress
+            updateLapProgress();
+
+            // Update speedometer
+            updateSpeedometer();
+        }
+
+        function updateLapProgress() {
+            const totalLength = trackCurve.getLength();
+
+            // Find closest point on track
+            let closestPoint = trackCurve.getPointAt(0);
+            let minDistance = car.position.distanceTo(closestPoint);
+
+            for (let i = 1; i <= 100; i++) {
+                const point = trackCurve.getPointAt(i / 100);
+                const distance = car.position.distanceTo(point);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestPoint = point;
+                }
+            }
+
+            const progress = (minDistance / totalLength) % 1;
+
+            gameState.lapProgress = Math.round(progress * 100);
+
+            // Check for lap completion
+            if (progress < 0.1 && gameState.lapProgress > 80) {
+                if (gameState.currentLap < gameState.totalLaps) {
+                    gameState.currentLap++;
+                    gameState.lapProgress = 0;
+                    updateLapDisplay();
+                } else {
+                    gameState.raceFinished = true;
+                    document.getElementById('race-complete').style.display = 'block';
+                }
+            }
+
+            updateLapDisplay();
+        }
+
+        function updateLapDisplay() {
+            document.getElementById('current-lap').textContent = gameState.currentLap;
+            document.getElementById('lap-progress').textContent = gameState.lapProgress;
+        }
+
+        function updateSpeedometer() {
+            const kmh = Math.round((gameState.speed * 3.6));
+            document.getElementById('speed-value').textContent = kmh;
+        }
+
+        function updateCamera() {
+            const cameraOffset = new THREE.Vector3(0, 8, 10);
+
+            // Calculate camera position behind the car
+            const targetPosition = car.position.clone().add(cameraOffset);
+
+            // Smooth camera movement
+            camera.position.lerp(targetPosition, 0.1);
+
+            // Look at a point ahead of the car
+            const lookDistance = 8;
+            const lookTarget = car.position.clone().add(new THREE.Vector3(
+                Math.sin(car.rotation.y) * lookDistance,
+                0,
+                Math.cos(car.rotation.y) * lookDistance
+            ));
+
+            camera.lookAt(lookTarget);
+        }
+
+        function render() {
+            renderer.render(scene, camera);
+        }
+
+        function gameLoop(time) {
+            const deltaTime = (time - lastTime) / 1000;
+            lastTime = time;
+
+            // Clamp delta time to prevent spiral of death
+            const clampedDeltaTime = Math.min(deltaTime, 0.1);
+
+            accumulator += clampedDeltaTime;
+
+            // Fixed timestep physics updates
+            while (accumulator >= fixedDeltaTime) {
+                updatePhysics(fixedDeltaTime);
+                accumulator -= fixedDeltaTime;
+            }
+
+            // Render
+            updateCamera();
+            render();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function restartGame() {
+            // Reset game state
+            gameState.speed = 0;
+            gameState.currentLap = 1;
+            gameState.lapProgress = 0;
+            gameState.raceFinished = false;
+
+            // Reset input
+            input.forward = false;
+            input.backward = false;
+            input.reverse = false;
+
+            // Reset car position
+            const startPoint = trackCurve.getPointAt(0);
+            car.position.copy(startPoint);
+            car.rotation.set(0, 0, 0);
+
+            // Hide race complete screen
+            document.getElementById('race-complete').style.display = 'none';
+
+            // Update displays
+            updateLapDisplay();
+            updateSpeedometer();
+        }
+
+        // Initialize game
+        init();
+    </script>
+</body>
+</html>
